@@ -1,0 +1,7 @@
+[browser]
+# Streamlit 사용 통계 전송 끄기
+gatherUsageStats = false
+
+[server]
+# 이 PC에서만 접속 가능
+address = "localhost"
