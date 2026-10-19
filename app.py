@@ -3,6 +3,7 @@
 실행: streamlit run app.py   (Windows는 실행.bat 더블클릭)
 """
 
+import hashlib
 import io
 import os
 from pathlib import Path
@@ -12,7 +13,6 @@ from pypdf import PdfReader
 
 import llm
 import prompts
-from pii_check import mask_pii
 
 APP_DIR = Path(__file__).parent
 KRW_PER_USD = 1400  # 비용 표시용 환율 (추정치)
@@ -55,15 +55,22 @@ st.set_page_config(page_title="8주 초과 치료 소견서 보조", page_icon="
 st.title("📝 8주 초과 치료 필요성 소견서 작성 보조")
 st.caption("진료기록에 근거한 초안을 만듭니다. 최종 판단·수정·서명은 원장님이 하셔야 합니다.")
 
+# AI 요청 중에는 모든 입력을 잠가서, 버튼을 여러 번 누르거나 다른 입력을 바꿔도 요청이 중복되지 않게 한다.
+st.session_state.setdefault("running", False)
+st.session_state.setdefault("cache", {})  # 같은 입력으로 이미 받은 결과 (중복 비용 방지)
+busy = st.session_state["running"]
+
 # ---------- 사이드바: 설정 ----------
 with st.sidebar:
     st.header("설정")
-    model_label = st.selectbox("AI 모델", list(llm.MODELS))
+    model_label = st.selectbox("AI 모델", list(llm.MODELS), disabled=busy)
     model = llm.MODELS[model_label]
     provider = llm.PROVIDERS[model["provider"]]
     saved_key = load_saved_key(provider)
-    api_key = st.text_input(f"{provider['name']} API 키", value=saved_key, type="password", key=f"key_{model['provider']}")
-    if api_key and api_key != saved_key and st.button("이 PC에 키 저장"):
+    api_key = st.text_input(
+        f"{provider['name']} API 키", value=saved_key, type="password", key=f"key_{model['provider']}", disabled=busy
+    )
+    if api_key and api_key != saved_key and st.button("이 PC에 키 저장", disabled=busy):
         (APP_DIR / provider["key_file"]).write_text(api_key.strip(), encoding="utf-8")
         st.success(f"{provider['key_file']}에 저장했습니다.")
     if model["provider"] == "google":
@@ -81,8 +88,10 @@ files = st.file_uploader(
     "비식별화한 진단서·진료기록부 PDF (입원·통원 기록 등 여러 개를 한 번에 올릴 수 있습니다)",
     type=["pdf"],
     accept_multiple_files=True,
+    disabled=busy,
 )
 if not files:
+    st.session_state["running"] = False
     st.info("PDF를 올려주세요. 원본 PDF는 이 PC 밖으로 나가지 않고, 추출한 글자만 AI로 전송됩니다.")
     st.stop()
 
@@ -93,7 +102,8 @@ for i, f in enumerate(files):
     name_col.markdown(f"📄 {f.name}")
     default = guess_kind(f.name)
     kinds[f.name] = kind_col.selectbox(
-        "종류", RECORD_KINDS, index=RECORD_KINDS.index(default), key=f"kind_{i}_{f.name}", label_visibility="collapsed"
+        "종류", RECORD_KINDS, index=RECORD_KINDS.index(default), key=f"kind_{i}_{f.name}",
+        label_visibility="collapsed", disabled=busy,
     )
 
 texts, scanned = [], {}
@@ -101,6 +111,7 @@ for f in files:
     try:
         text, empty_pages = extract_pdf(f.name, kinds[f.name], f.getvalue())
     except Exception as e:  # 손상·암호 PDF 등
+        st.session_state["running"] = False
         st.error(f"{f.name}: PDF를 읽지 못했습니다 ({e})")
         st.stop()
     texts.append(text)
@@ -111,26 +122,17 @@ if scanned:
     detail = ", ".join(f"{name} p.{','.join(map(str, pages))}" for name, pages in scanned.items())
     st.warning(
         f"글자를 추출하지 못한 쪽이 있습니다: {detail}\n\n"
-        "스캔(사진) PDF로 보입니다. 이 쪽들은 개인정보 검사를 할 수 없어 AI에 보내지 않습니다. "
+        "스캔(사진) PDF로 보입니다. 이 쪽들의 내용은 AI에 전달되지 않습니다. "
         "EMR에서 PDF로 직접 출력한 파일을 사용해 주세요."
     )
 
-raw_text = "\n\n".join(texts)
+records = "\n\n".join(texts)
 
-# ---------- 2. 개인정보 점검 ----------
-st.subheader("2. 개인정보 점검")
-masked_text, findings = mask_pii(raw_text)
-if findings:
-    st.warning(f"개인정보로 의심되는 {len(findings)}곳을 [가림]으로 바꿨습니다. 아래 목록과 전송될 내용을 확인해 주세요.")
-    st.table({"종류": [f.kind for f in findings], "원래 값": [f.text for f in findings]})
-else:
-    st.success("자동 점검에서 개인정보 패턴이 발견되지 않았습니다.")
-st.caption("자동 점검은 정해진 패턴만 찾습니다. 이름·주소가 다른 형태로 남아 있을 수 있으니 직접 확인해 주세요.")
-
-with st.expander("AI에 전송될 내용 보기 (마스킹 적용 후)", expanded=bool(findings)):
-    st.text_area("전송 내용", masked_text, height=400, disabled=True, label_visibility="collapsed")
-
-confirmed = st.checkbox("전송될 내용을 확인했고, 환자를 특정할 수 있는 정보가 없습니다.")
+# ---------- 2. 전송 내용 확인 ----------
+st.subheader("2. 전송 내용 확인")
+with st.expander("AI에 전송될 내용 보기"):
+    st.text_area("전송 내용", records, height=400, disabled=True, label_visibility="collapsed")
+confirmed = st.checkbox("전송될 내용에 환자를 특정할 수 있는 정보가 없음을 확인했습니다.", disabled=busy)
 
 # ---------- 3. 작성 ----------
 st.subheader("3. 소견서 초안 작성")
@@ -138,42 +140,70 @@ memo = st.text_area(
     "원장님 메모 (선택)",
     placeholder="기록에 없지만 반영할 내용. 예) 향후 4주간 주 3회 침·추나 치료 계획",
     height=80,
+    disabled=busy,
 )
 
-if st.button("초안 작성", type="primary", disabled=not (confirmed and api_key)):
-    st.session_state.pop("result", None)
-    placeholder = st.empty()
-    streamed = []
+request_id = hashlib.sha256("\x00".join([model["id"], records, memo]).encode()).hexdigest()
+already_done = request_id in st.session_state["cache"]
 
-    def show(chunk: str) -> None:
-        streamed.append(chunk)
-        placeholder.text("".join(streamed))
 
+def start(force: bool = False) -> None:
+    # 버튼을 누른 순간 바로 잠근다. 다음 화면부터 버튼이 비활성화된다.
+    st.session_state["running"] = True
+    st.session_state["force"] = force
+
+
+ready = confirmed and bool(api_key)
+col_a, col_b = st.columns([1, 4])
+col_a.button("초안 작성", type="primary", disabled=busy or not ready, on_click=start)
+if already_done:
+    col_b.button("같은 내용으로 다시 작성 (비용 다시 발생)", disabled=busy or not ready, on_click=start, args=(True,))
+
+if busy:
+    force = st.session_state.pop("force", False)
     try:
-        res = llm.generate(
-            model, api_key.strip(), prompts.SYSTEM_PROMPT, prompts.build_user_message(masked_text, memo), show
-        )
-    except llm.LLMError as e:
-        placeholder.empty()
-        st.error(str(e))
-        st.stop()
-    placeholder.empty()
+        if already_done and not force:
+            # 같은 입력으로 이미 받은 결과가 있으면 다시 요청하지 않는다.
+            st.session_state["result"] = st.session_state["cache"][request_id] | {"reused": True}
+        else:
+            placeholder = st.empty()
+            streamed = []
 
-    output = res.text
-    draft, review = prompts.split_output(output)
-    st.session_state["result"] = {
-        "draft": draft,
-        "review": review,
-        "truncated": res.truncated,
-        "input_tokens": res.input_tokens,
-        "output_tokens": res.output_tokens,
-        "cost": llm.cost_usd(model, res.input_tokens, res.output_tokens),
-        "model": model_label,
-        "provider": model["provider"],
-    }
+            def show(chunk: str) -> None:
+                streamed.append(chunk)
+                placeholder.text("".join(streamed))
+
+            with st.spinner("AI가 작성 중입니다. 끝날 때까지 입력이 잠깁니다..."):
+                res = llm.generate(
+                    model, api_key.strip(), prompts.SYSTEM_PROMPT, prompts.build_user_message(records, memo), show
+                )
+            draft, review = prompts.split_output(res.text)
+            result = {
+                "draft": draft,
+                "review": review,
+                "truncated": res.truncated,
+                "input_tokens": res.input_tokens,
+                "output_tokens": res.output_tokens,
+                "cost": llm.cost_usd(model, res.input_tokens, res.output_tokens),
+                "model": model_label,
+                "provider": model["provider"],
+            }
+            st.session_state["cache"][request_id] = result
+            st.session_state["result"] = result | {"reused": False}
+        st.session_state.pop("error", None)
+    except llm.LLMError as e:
+        st.session_state["error"] = str(e)
+    finally:
+        st.session_state["running"] = False
+    st.rerun()
+
+if st.session_state.get("error"):
+    st.error(st.session_state["error"])
 
 result = st.session_state.get("result")
 if result:
+    if result.get("reused"):
+        st.info("같은 내용으로 이미 작성한 결과를 다시 보여드립니다. 추가 비용은 없습니다.")
     if result["truncated"]:
         st.warning("출력이 길이 제한에 걸려 중간에 끊겼습니다. 결과 끝부분을 확인해 주세요.")
 
