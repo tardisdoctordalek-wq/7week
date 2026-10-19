@@ -29,7 +29,17 @@ def load_saved_key(provider: dict) -> str:
     return ""
 
 
-def extract_pdf(name: str, data: bytes) -> tuple[str, list[int]]:
+RECORD_KINDS = ["통원", "입원", "진단서", "영상·검사", "기타"]
+
+
+def guess_kind(filename: str) -> str:
+    for word, kind in [("입원", "입원"), ("통원", "통원"), ("외래", "통원"), ("진단", "진단서"), ("영상", "영상·검사"), ("검사", "영상·검사")]:
+        if word in filename:
+            return kind
+    return "통원"
+
+
+def extract_pdf(name: str, kind: str, data: bytes) -> tuple[str, list[int]]:
     """쪽 표시를 붙인 텍스트와, 글자가 거의 없는(스캔 의심) 쪽 번호 목록을 돌려준다."""
     reader = PdfReader(io.BytesIO(data))
     chunks, empty_pages = [], []
@@ -37,7 +47,7 @@ def extract_pdf(name: str, data: bytes) -> tuple[str, list[int]]:
         text = (page.extract_text() or "").strip()
         if len(text) < MIN_CHARS_PER_PAGE:
             empty_pages.append(i)
-        chunks.append(f"=== {name} p.{i} ===\n{text}")
+        chunks.append(f"=== [{kind}] {name} p.{i} ===\n{text}")
     return "\n\n".join(chunks), empty_pages
 
 
@@ -68,16 +78,28 @@ with st.sidebar:
 # ---------- 1. 업로드 ----------
 st.subheader("1. 진료기록 PDF 업로드")
 files = st.file_uploader(
-    "비식별화한 진단서·진료기록부 PDF (여러 개 가능)", type=["pdf"], accept_multiple_files=True
+    "비식별화한 진단서·진료기록부 PDF (입원·통원 기록 등 여러 개를 한 번에 올릴 수 있습니다)",
+    type=["pdf"],
+    accept_multiple_files=True,
 )
 if not files:
     st.info("PDF를 올려주세요. 원본 PDF는 이 PC 밖으로 나가지 않고, 추출한 글자만 AI로 전송됩니다.")
     st.stop()
 
+st.markdown("**파일별 기록 종류** (AI가 입원·통원 기록을 구분해서 근거를 표시합니다)")
+kinds = {}
+for i, f in enumerate(files):
+    name_col, kind_col = st.columns([3, 1])
+    name_col.markdown(f"📄 {f.name}")
+    default = guess_kind(f.name)
+    kinds[f.name] = kind_col.selectbox(
+        "종류", RECORD_KINDS, index=RECORD_KINDS.index(default), key=f"kind_{i}_{f.name}", label_visibility="collapsed"
+    )
+
 texts, scanned = [], {}
 for f in files:
     try:
-        text, empty_pages = extract_pdf(f.name, f.getvalue())
+        text, empty_pages = extract_pdf(f.name, kinds[f.name], f.getvalue())
     except Exception as e:  # 손상·암호 PDF 등
         st.error(f"{f.name}: PDF를 읽지 못했습니다 ({e})")
         st.stop()
