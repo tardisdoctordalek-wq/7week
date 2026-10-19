@@ -16,6 +16,12 @@ if not exist .venv (
 call .venv\Scripts\activate.bat
 python -m pip install -q -r requirements.txt
 
+rem Streamlit 첫 실행 시 이메일 입력 질문을 건너뛴다
+if not exist "%USERPROFILE%\.streamlit\credentials.toml" (
+  mkdir "%USERPROFILE%\.streamlit" 2> nul
+  (echo [general]& echo email = "") > "%USERPROFILE%\.streamlit\credentials.toml"
+)
+
 echo 브라우저에서 앱이 열립니다. 종료하려면 이 창을 닫으세요.
 streamlit run app.py
 pause
