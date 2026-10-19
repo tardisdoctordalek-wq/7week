@@ -1,4 +1,5 @@
 api_key.txt
+gemini_key.txt
 .venv/
 __pycache__/
 *.pdf
