@@ -5,28 +5,18 @@
 
 import hashlib
 import io
-import os
 from pathlib import Path
 
 import streamlit as st
 from pypdf import PdfReader
 
+import keystore
 import llm
 import prompts
 
 APP_DIR = Path(__file__).parent
 KRW_PER_USD = 1400  # 비용 표시용 환율 (추정치)
 MIN_CHARS_PER_PAGE = 30  # 이보다 글자가 적으면 스캔(이미지) PDF로 본다
-
-
-def load_saved_key(provider: dict) -> str:
-    for name in provider["env"]:
-        if os.environ.get(name):
-            return os.environ[name]
-    key_file = APP_DIR / provider["key_file"]
-    if key_file.exists():
-        return key_file.read_text(encoding="utf-8").strip()
-    return ""
 
 
 RECORD_KINDS = ["통원", "입원", "진단서", "영상·검사", "기타"]
@@ -66,9 +56,12 @@ with st.sidebar:
     model_label = st.selectbox("AI 모델", list(llm.MODELS), disabled=busy)
     model = llm.MODELS[model_label]
     provider = llm.PROVIDERS[model["provider"]]
-    saved_key = load_saved_key(provider)
+    provider_id = model["provider"]
+    saved_key, key_notice = keystore.load(provider_id, provider, APP_DIR)
+    if key_notice:
+        st.info(key_notice)
     api_key = st.text_input(
-        f"{provider['name']} API 키", value=saved_key, type="password", key=f"key_{model['provider']}", disabled=busy
+        f"{provider['name']} API 키", value=saved_key, type="password", key=f"key_{provider_id}", disabled=busy
     )
     api_key = api_key.strip()
     if api_key:
@@ -78,9 +71,19 @@ with st.sidebar:
             api_key = ""
         elif key_warning:
             st.warning(key_warning)
-    if api_key and api_key != saved_key and st.button("이 PC에 키 저장", disabled=busy):
-        (APP_DIR / provider["key_file"]).write_text(api_key, encoding="utf-8")
-        st.success(f"{provider['key_file']}에 저장했습니다.")
+    if api_key and api_key != saved_key and st.button("이 PC에 키 저장 (암호화)", disabled=busy):
+        try:
+            keystore.save(provider_id, api_key)
+            st.success("Windows 자격 증명 관리자에 암호화해 저장했습니다.")
+        except keystore.KeyStoreError as e:
+            st.error(str(e))
+    if saved_key and api_key == saved_key:
+
+        def forget_key() -> None:
+            keystore.delete(provider_id)
+            st.session_state[f"key_{provider_id}"] = ""
+
+        st.button("저장된 키 삭제", on_click=forget_key, disabled=busy)
     if model["provider"] == "google":
         st.warning(
             "Google 무료 키(결제 미등록)로 쓰면, 구글 약관상 입력 자료가 제품 개선에 사용되고 "
