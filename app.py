@@ -70,8 +70,16 @@ with st.sidebar:
     api_key = st.text_input(
         f"{provider['name']} API 키", value=saved_key, type="password", key=f"key_{model['provider']}", disabled=busy
     )
+    api_key = api_key.strip()
+    if api_key:
+        key_error, key_warning = llm.check_key(provider, api_key)
+        if key_error:
+            st.error(key_error)
+            api_key = ""
+        elif key_warning:
+            st.warning(key_warning)
     if api_key and api_key != saved_key and st.button("이 PC에 키 저장", disabled=busy):
-        (APP_DIR / provider["key_file"]).write_text(api_key.strip(), encoding="utf-8")
+        (APP_DIR / provider["key_file"]).write_text(api_key, encoding="utf-8")
         st.success(f"{provider['key_file']}에 저장했습니다.")
     if model["provider"] == "google":
         st.warning(
@@ -175,7 +183,7 @@ if busy:
 
             with st.spinner("AI가 작성 중입니다. 끝날 때까지 입력이 잠깁니다..."):
                 res = llm.generate(
-                    model, api_key.strip(), prompts.SYSTEM_PROMPT, prompts.build_user_message(records, memo), show
+                    model, api_key, prompts.SYSTEM_PROMPT, prompts.build_user_message(records, memo), show
                 )
             draft, review = prompts.split_output(res.text)
             result = {

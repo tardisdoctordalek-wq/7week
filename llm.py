@@ -24,9 +24,23 @@ MODELS = {
 }
 
 PROVIDERS = {
-    "anthropic": {"name": "Anthropic (Claude)", "key_file": "api_key.txt", "env": ["ANTHROPIC_API_KEY"]},
-    "google": {"name": "Google AI Studio (Gemini)", "key_file": "gemini_key.txt", "env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]},
+    "anthropic": {
+        "name": "Anthropic (Claude)", "key_file": "api_key.txt", "env": ["ANTHROPIC_API_KEY"], "prefix": "sk-ant-",
+    },
+    "google": {
+        "name": "Google AI Studio (Gemini)", "key_file": "gemini_key.txt", "env": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        "prefix": "AIza",
+    },
 }
+
+
+def check_key(provider: dict, key: str) -> tuple[str | None, str | None]:
+    """(오류, 경고)를 돌려준다. 오류가 있으면 그 키는 쓸 수 없다."""
+    if not key.isascii() or any(c.isspace() for c in key):
+        return "키에 띄어쓰기나 한글 등 키가 아닌 글자가 들어 있습니다. 키만 다시 복사해 붙여넣어 주세요.", None
+    if not key.startswith(provider["prefix"]):
+        return None, f"{provider['name']} 키는 보통 '{provider['prefix']}'로 시작합니다. 맞는 키인지 확인해 주세요."
+    return None, None
 
 
 class LLMError(Exception):

@@ -78,3 +78,12 @@ def test_cost():
     assert llm.cost_usd(haiku, 100_000, 100_000) == pytest.approx(0.06)
     assert llm.cost_usd(haiku, 200_000, 0) == pytest.approx(0.10)  # 10만 토큰 초과 단가
     assert llm.cost_usd(GEMINI, 1_000_000, 1_000_000) == pytest.approx(2.80)
+
+
+def test_check_key():
+    google = llm.PROVIDERS["google"]
+    assert llm.check_key(google, "AIzaSyExample123") == (None, None)
+    err, _ = llm.check_key(google, "Connection error Is Streamlit still running?")
+    assert err and "띄어쓰기" in err
+    err, warn = llm.check_key(google, "sk-ant-abc")
+    assert err is None and "AIza" in warn
