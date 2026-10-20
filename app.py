@@ -149,7 +149,7 @@ confirmed = st.checkbox("전송될 내용에 환자를 특정할 수 있는 정�
 st.subheader("3. 소견서 초안 작성")
 memo = st.text_area(
     "원장님 메모 (선택)",
-    placeholder="기록에 없지만 반영할 내용. 예) 향후 4주간 주 3회 침·추나 치료 계획",
+    placeholder="기록에 없지만 반영할 내용. 예) 3주차 이후 야간통 호소 증가",
     height=80,
     disabled=busy,
 )
@@ -189,6 +189,7 @@ if busy:
                     model, api_key, prompts.SYSTEM_PROMPT, prompts.build_user_message(records, memo), show
                 )
             draft, review = prompts.split_output(res.text)
+            draft = prompts.apply_fixed_answers(draft)
             result = {
                 "draft": draft,
                 "review": review,

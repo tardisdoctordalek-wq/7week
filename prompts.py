@@ -18,6 +18,11 @@ ITEMS = [
     "의학적으로 필요한 검사 및 영상 결과",
 ]
 
+# 항목 번호별 고정 문구. AI가 무엇을 쓰든 출력 후 이 문구로 바꿔 넣는다.
+FIXED_ANSWERS = {
+    7: "8주 이후 향후 4주간의 치료가 더 필요할 것으로 사료됩니다",
+}
+
 TEMPLATE = OPENING + "\n\n" + "\n".join(f"{i}) {name} :" for i, name in enumerate(ITEMS, 1))
 
 DRAFT_MARK = "<<<소견서>>>"
@@ -36,8 +41,8 @@ SYSTEM_PROMPT = f"""당신은 한의원 원장이 자동차보험 경상환자�
    입원 기록과 통원 기록이 함께 있으면 기간을 구분해 경과를 서술한다(예: 입원 기간 중 ~, 퇴원 후 통원 치료 중 ~).
 3. 항목에 해당하는 기록이 없으면 지어내지 말고 "진료기록상 확인되지 않음"이라고 쓴다.
 4. 수치(VAS·NRS, ROM 각도, 이학적 검사 결과 등)는 기록의 값과 단위를 그대로 옮긴다. 시간에 따른 변화는 첫 기록과 최근 기록을 비교해 보여준다.
-5. 6) 의학적 이유: 기록된 경과와 소견을 연결해서만 설명한다. 문헌·통계·가이드라인을 인용하거나 지어내지 않는다. 기록만으로 설명이 부족하면 그 사실을 7번 아래 검토사항에 적는다.
-6. 7) 치료 계획: 기록에 치료 계획이 있으면 그대로 쓰고, 없으면 "[원장 기재 필요: 치료 종류/빈도/기간]"이라고 남긴다. 기간을 임의로 정하지 않는다.
+5. 6) 의학적 이유: 기록된 경과와 소견을 연결해서만 설명한다. 문헌·통계·가이드라인을 인용하거나 지어내지 않는다. 기록만으로 설명이 부족하면 그 사실을 검토사항에 적는다.
+6. 7) 항목은 고정 문구다. 다른 내용 없이 "{FIXED_ANSWERS[7]}"만 그대로 쓴다.
 7. 과장하지 않는다. 호전된 소견도 기록에 있으면 그대로 쓴다. 호전과 잔존 증상을 함께 보여주는 것이 검토자에게 더 신뢰를 준다.
 8. 한의 진단·치료(침, 약침, 추나, 한약, 변증 등)는 기록에 적힌 용어를 그대로 쓴다.
 9. 문체는 진단서·소견서 문체(예: "~함", "~관찰됨", "~호소함")로 간결하게 쓴다.
@@ -69,6 +74,25 @@ def split_output(text: str) -> tuple[str, str]:
     body = text.split(DRAFT_MARK, 1)[-1]
     draft, _, review = body.partition(REVIEW_MARK)
     return draft.strip(), review.strip()
+
+
+def apply_fixed_answers(draft: str) -> str:
+    """고정 문구 항목을 정해진 문구로 바꾼다. 항목 줄이 없으면 다음 번호 앞(없으면 끝)에 넣는다."""
+    for num, answer in FIXED_ANSWERS.items():
+        line = f"{num}) {ITEMS[num - 1]} : {answer}"
+        # 항목 줄부터 다음 번호 항목 직전까지(여러 줄 답변 포함)를 한 덩어리로 찾는다.
+        block = re.compile(rf"(?m)^[ \t]*{num}\).*(?:\n(?![ \t]*{num + 1}\)).*)*")
+        match = block.search(draft)
+        if match:
+            trailing_blank = "\n" if match.group(0).endswith("\n") else ""
+            draft = draft[: match.start()] + line + trailing_blank + draft[match.end() :]
+            continue
+        next_item = re.search(rf"(?m)^[ \t]*{num + 1}\)", draft)
+        if next_item:
+            draft = draft[: next_item.start()] + line + "\n" + draft[next_item.start() :]
+        else:
+            draft = draft.rstrip() + "\n" + line
+    return draft.strip()
 
 
 def build_user_message(records: str, memo: str) -> str:
