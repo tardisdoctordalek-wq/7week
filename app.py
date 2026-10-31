@@ -5,6 +5,7 @@
 
 import hashlib
 import io
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -29,6 +30,8 @@ def guess_kind(filename: str) -> str:
     return "통원"
 
 
+# 화면을 클릭할 때마다 스크립트가 다시 실행되므로, 같은 파일은 다시 읽지 않게 결과를 기억한다.
+@st.cache_data(max_entries=20, show_spinner=False)
 def extract_pdf(name: str, kind: str, data: bytes) -> tuple[str, list[int]]:
     """쪽 표시를 붙인 텍스트와, 글자가 거의 없는(스캔 의심) 쪽 번호 목록을 돌려준다."""
     reader = PdfReader(io.BytesIO(data))
@@ -179,10 +182,15 @@ if busy:
         else:
             placeholder = st.empty()
             streamed = []
+            last_draw = [0.0]
 
             def show(chunk: str) -> None:
+                # 조각마다 화면을 다시 그리면 브라우저가 무거워지므로 0.3초에 한 번만 그린다.
                 streamed.append(chunk)
-                placeholder.text("".join(streamed))
+                now = time.monotonic()
+                if now - last_draw[0] >= 0.3:
+                    last_draw[0] = now
+                    placeholder.text("".join(streamed))
 
             with st.spinner("AI가 작성 중입니다. 끝날 때까지 입력이 잠깁니다..."):
                 res = llm.generate(

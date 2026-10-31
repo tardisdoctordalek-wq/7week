@@ -5,3 +5,8 @@ gatherUsageStats = false
 [server]
 # 이 PC에서만 접속 가능
 address = "localhost"
+# 실행.bat이 이 포트로 앱이 이미 켜져 있는지 확인한다
+port = 8501
+# 코드 파일 변경 감시 끄기 (사용자는 코드를 고치지 않으므로 불필요한 부하만 생김)
+fileWatcherType = "none"
+runOnSave = false
