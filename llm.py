@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Callable
 
 import anthropic
-import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
@@ -133,8 +132,10 @@ def _generate_google(model_id, api_key, system, user, on_text) -> Result:
         raise LLMError(f"Gemini 서버 오류 ({e.code}). 잠시 후 다시 시도해 주세요.")
     except genai_errors.APIError as e:
         raise LLMError(f"Gemini API 오류 ({e.code}): {e.message}")
-    except httpx.TransportError:
-        raise LLMError("인터넷 연결을 확인해 주세요.")
+    except LLMError:
+        raise
+    except Exception as e:  # 네트워크 오류 등. 구글 SDK 버전마다 예외 종류가 달라 넓게 받는다.
+        raise LLMError(f"Gemini 연결 오류: 인터넷 연결을 확인해 주세요. ({type(e).__name__})")
 
     if finish in _GOOGLE_BLOCKED:
         raise LLMError(f"Gemini가 응답을 중단했습니다 (사유: {finish}). 다른 모델로 시도해 주세요.")
