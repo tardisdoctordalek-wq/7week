@@ -13,9 +13,10 @@ def test_strip_citations_and_split():
     assert review == "- ROM 미측정"
 
 
-from prompts import FIXED_ANSWERS, apply_fixed_answers  # noqa: E402
+import prompts  # noqa: E402
+from prompts import apply_fixed_answers, fixed_answers  # noqa: E402
 
-LINE7 = "7) 필요한 치료의 종류·빈도·예상 기간 : " + FIXED_ANSWERS[7]
+LINE7 = "7) 필요한 치료의 종류·빈도·예상 기간 : " + fixed_answers(4)[7]
 
 
 def test_item7_replaced_single_line():
@@ -37,3 +38,19 @@ def test_item7_last_or_missing():
 def test_item17_not_confused_with_7():
     draft = "6) 이유 : VAS 7) 이후 악화\n7) 치료 : x\n8) 검사 : 없음"
     assert apply_fixed_answers(draft).splitlines() == ["6) 이유 : VAS 7) 이후 악화", LINE7, "8) 검사 : 없음"]
+
+
+def test_item7_weeks_option():
+    draft = "6) 이유 : 잔존\n7) 치료 : x\n8) 검사 : 없음"
+    assert "향후 8주간의 치료가" in apply_fixed_answers(draft, 8)
+    assert "향후 4주간의 치료가" in apply_fixed_answers(draft, 4)
+    assert "향후 8주간의 치료가" in prompts.build_system_prompt(prompts.MODE_FACTS, 8)
+
+
+def test_mode_rules_differ():
+    facts = prompts.build_system_prompt(prompts.MODE_FACTS, 4)
+    prognosis = prompts.build_system_prompt(prompts.MODE_PROGNOSIS, 4)
+    assert "예후나 기대 효과" in facts and "치료 지속 시 추가 호전이 기대됨" not in facts
+    assert "추세 근거가 없는 예후" in prognosis and "기대 문장은 쓰지 않는다" in prognosis
+    for text in (facts, prognosis):
+        assert "종합 소견은 쓰지 않음" in text and "진료기록상 확인되지 않음" in text

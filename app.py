@@ -150,6 +150,17 @@ confirmed = st.checkbox("전송될 내용에 환자를 특정할 수 있는 정�
 
 # ---------- 3. 작성 ----------
 st.subheader("3. 소견서 초안 작성")
+mode_col, weeks_col = st.columns([2, 1])
+mode = mode_col.radio(
+    "작성 방식",
+    prompts.MODES,
+    horizontal=True,
+    disabled=busy,
+    help="'기록 추세 기반 예후 포함'은 기록된 수치 변화(예: VAS 8→5)에서 나오는 예후 문장까지 씁니다.",
+)
+weeks = weeks_col.radio(
+    "추가 치료 기간 (7번)", prompts.WEEK_OPTIONS, format_func=lambda w: f"{w}주", horizontal=True, disabled=busy
+)
 memo = st.text_area(
     "원장님 메모 (선택)",
     placeholder="기록에 없지만 반영할 내용. 예) 3주차 이후 야간통 호소 증가",
@@ -157,7 +168,7 @@ memo = st.text_area(
     disabled=busy,
 )
 
-request_id = hashlib.sha256("\x00".join([model["id"], records, memo]).encode()).hexdigest()
+request_id = hashlib.sha256("\x00".join([model["id"], mode, str(weeks), records, memo]).encode()).hexdigest()
 already_done = request_id in st.session_state["cache"]
 
 
@@ -194,10 +205,14 @@ if busy:
 
             with st.spinner("AI가 작성 중입니다. 끝날 때까지 입력이 잠깁니다..."):
                 res = llm.generate(
-                    model, api_key, prompts.SYSTEM_PROMPT, prompts.build_user_message(records, memo), show
+                    model,
+                    api_key,
+                    prompts.build_system_prompt(mode, weeks),
+                    prompts.build_user_message(records, memo),
+                    show,
                 )
             draft, review = prompts.split_output(res.text)
-            draft = prompts.apply_fixed_answers(draft)
+            draft = prompts.apply_fixed_answers(draft, weeks)
             result = {
                 "draft": draft,
                 "review": review,
@@ -206,6 +221,8 @@ if busy:
                 "output_tokens": res.output_tokens,
                 "cost": llm.cost_usd(model, res.input_tokens, res.output_tokens),
                 "model": model_label,
+                "mode": mode,
+                "weeks": weeks,
                 "provider": model["provider"],
             }
             st.session_state["cache"][request_id] = result
@@ -239,7 +256,7 @@ if result:
         st.markdown(result["review"] or "검토사항이 출력되지 않았습니다.")
 
     st.caption(
-        f"{result['model']} · 입력 {result['input_tokens']:,} 토큰 · 출력 {result['output_tokens']:,} 토큰 "
+        f"{result['model']} · {result['mode']} · 추가 치료 {result['weeks']}주 · 입력 {result['input_tokens']:,} 토큰 · 출력 {result['output_tokens']:,} 토큰 "
         f"(AI 사고과정 포함) · 이번 비용 약 ${result['cost']:.4f} ≈ {result['cost'] * KRW_PER_USD:,.0f}원 "
         f"(환율 {KRW_PER_USD:,}원 가정)"
         + (" · Google 무료 키라면 실제 청구액은 0원" if result["provider"] == "google" else "")
