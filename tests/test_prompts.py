@@ -59,13 +59,29 @@ def test_item7_dates_and_custom_fields():
     assert "주 3회의 침 및 추나요법 등이" in custom.sentence() and "약 8주간 2027.01.09까지" in custom.sentence()
     draft = "6) 이유 : 잔존\n7) 치료 : x\n8) 검사 : 없음"
     assert custom.sentence() in apply_fixed_answers(draft, custom)
-    assert custom.sentence() in prompts.build_system_prompt(prompts.MODE_FACTS, custom)
 
 
 def test_mode_rules_differ():
-    facts = prompts.build_system_prompt(prompts.MODE_FACTS, PLAN)
-    prognosis = prompts.build_system_prompt(prompts.MODE_PROGNOSIS, PLAN)
+    facts = prompts.build_system_prompt(prompts.MODE_FACTS)
+    prognosis = prompts.build_system_prompt(prompts.MODE_PROGNOSIS)
     assert "예후나 기대 효과" in facts and "치료 지속 시 추가 호전이 기대됨" not in facts
     assert "추세 근거가 없는 예후" in prognosis and "기대 문장은 쓰지 않는다" in prognosis
     for text in (facts, prognosis):
         assert "종합 소견은 쓰지 않음" in text and "진료기록상 확인되지 않음" in text
+
+
+def test_parse_accident():
+    out = f"{prompts.ACCIDENT_MARK} 2026-09-20 [근거: 통원 2026-09-21, p.1]\n{DRAFT_MARK}\n본문"
+    assert prompts.parse_accident(out) == (date(2026, 9, 20), "[근거: 통원 2026-09-21, p.1]")
+    assert prompts.parse_accident(f"{prompts.ACCIDENT_MARK} 2026.9.20\n")[0] == date(2026, 9, 20)
+    assert prompts.parse_accident(f"{prompts.ACCIDENT_MARK} 2026년 9월 20일\n")[0] == date(2026, 9, 20)
+    # 근거 안의 날짜를 사고일로 읽지 않는다
+    assert prompts.parse_accident(f"{prompts.ACCIDENT_MARK} 확인 불가 [근거: 통원 2026-09-21]\n")[0] is None
+    assert prompts.parse_accident(f"{prompts.ACCIDENT_MARK} 2026-13-40\n")[0] is None
+    assert prompts.parse_accident("사고일 줄 없음")[0] is None
+    assert split_output(out)[0] == "본문"
+
+
+def test_item7_without_accident():
+    out = apply_fixed_answers("6) 이유 : 잔존\n7) 치료 : x\n8) 검사 : 없음", None)
+    assert prompts.NO_ACCIDENT_TEXT in out and "8주 경과일" not in out

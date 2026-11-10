@@ -160,19 +160,15 @@ mode = st.radio(
 
 st.markdown("**7번 치료 계획** (날짜는 앱이 계산합니다)")
 date_col, weeks_col = st.columns([1, 2])
-accident = date_col.date_input("사고일", value=None, format="YYYY.MM.DD", disabled=busy)
+manual_accident = date_col.date_input(
+    "사고일 (비워 두면 AI가 진료기록에서 찾음)", value=None, format="YYYY.MM.DD", disabled=busy
+)
 weeks = weeks_col.radio(
     "추가 치료 기간", prompts.WEEK_OPTIONS, format_func=lambda w: f"{w}주", horizontal=True, disabled=busy
 )
-
-plan = None
-if accident:
-    plan = prompts.TreatmentPlan(accident, weeks)
-    week8, end = plan.dates()
-    st.caption(f"8주 경과일 {week8:%Y.%m.%d} · 종료일 {end:%Y.%m.%d}")
-    st.caption(f"7번 문구: {plan.sentence()}")
-else:
-    st.caption("사고일을 입력해야 초안을 작성할 수 있습니다.")
+if manual_accident:
+    week8, end = prompts.TreatmentPlan(manual_accident, weeks).dates()
+    st.caption(f"입력한 사고일 기준: 8주 경과일 {week8:%Y.%m.%d} · 종료일 {end:%Y.%m.%d}")
 
 memo = st.text_area(
     "원장님 메모 (선택)",
@@ -181,8 +177,8 @@ memo = st.text_area(
     disabled=busy,
 )
 
-plan_text = plan.sentence() if plan else ""
-request_id = hashlib.sha256("\x00".join([model["id"], mode, plan_text, records, memo]).encode()).hexdigest()
+# 사고일·추가 치료 기간은 AI 출력 후 앱이 7번에 반영하므로, 바꿔도 AI를 다시 부르지 않는다.
+request_id = hashlib.sha256("\x00".join([model["id"], mode, records, memo]).encode()).hexdigest()
 already_done = request_id in st.session_state["cache"]
 
 
@@ -192,7 +188,7 @@ def start(force: bool = False) -> None:
     st.session_state["force"] = force
 
 
-ready = confirmed and bool(api_key) and plan is not None
+ready = confirmed and bool(api_key)
 col_a, col_b = st.columns([1, 4])
 col_a.button("초안 작성", type="primary", disabled=busy or not ready, on_click=start)
 if already_done:
@@ -221,14 +217,16 @@ if busy:
                 res = llm.generate(
                     model,
                     api_key,
-                    prompts.build_system_prompt(mode, plan),
+                    prompts.build_system_prompt(mode),
                     prompts.build_user_message(records, memo),
                     show,
                 )
             draft, review = prompts.split_output(res.text)
-            draft = prompts.apply_fixed_answers(draft, plan)
+            ai_accident, ai_evidence = prompts.parse_accident(res.text)
             result = {
                 "draft": draft,
+                "ai_accident": ai_accident,
+                "ai_evidence": ai_evidence,
                 "review": review,
                 "truncated": res.truncated,
                 "input_tokens": res.input_tokens,
@@ -236,7 +234,6 @@ if busy:
                 "cost": llm.cost_usd(model, res.input_tokens, res.output_tokens),
                 "model": model_label,
                 "mode": mode,
-                "weeks": weeks,
                 "provider": model["provider"],
             }
             st.session_state["cache"][request_id] = result
@@ -258,19 +255,37 @@ if result:
     if result["truncated"]:
         st.warning("출력이 길이 제한에 걸려 중간에 끊겼습니다. 결과 끝부분을 확인해 주세요.")
 
+    # 7번: 직접 입력한 사고일이 있으면 그것을, 없으면 AI가 찾은 사고일을 쓴다.
+    ai_accident = result.get("ai_accident")
+    accident = manual_accident or ai_accident
+    plan = prompts.TreatmentPlan(accident, weeks) if accident else None
+    if manual_accident:
+        st.info(f"7번 날짜는 입력하신 사고일 {manual_accident:%Y.%m.%d} 기준입니다.")
+        if ai_accident and ai_accident != manual_accident:
+            st.warning(f"참고: AI가 진료기록에서 찾은 사고일은 {ai_accident:%Y.%m.%d}로, 입력하신 날짜와 다릅니다.")
+    elif ai_accident:
+        evidence = f" {result['ai_evidence']}" if result.get("ai_evidence") else ""
+        st.warning(
+            f"⚠️ 7번 날짜는 AI가 진료기록에서 찾은 사고일 **{ai_accident:%Y.%m.%d}**{evidence} 기준입니다. "
+            "반드시 진료기록과 대조해 확인해 주세요. 틀리면 위의 사고일 칸에 직접 입력하면 7번이 바로 바뀝니다 (추가 비용 없음)."
+        )
+    else:
+        st.error("AI가 진료기록에서 사고일을 찾지 못했습니다. 위의 사고일 칸에 입력하면 7번 날짜가 채워집니다 (추가 비용 없음).")
+    final_draft = prompts.apply_fixed_answers(result["draft"], plan)
+
     tab_review, tab_submit, tab_check = st.tabs(["검토용 (근거 표시)", "제출용 (근거 제거)", "보강·확인 필요 사항"])
     with tab_review:
         st.caption("각 문장 끝의 [근거: ...]를 진료기록과 대조해 확인해 주세요.")
-        st.text_area("검토용", result["draft"], height=500, label_visibility="collapsed")
+        st.text_area("검토용", final_draft, height=500, label_visibility="collapsed")
     with tab_submit:
-        submit_text = prompts.strip_citations(result["draft"])
+        submit_text = prompts.strip_citations(final_draft)
         st.text_area("제출용", submit_text, height=500, label_visibility="collapsed")
         st.download_button("제출용 텍스트 저장 (.txt)", submit_text, file_name="소견서_초안.txt")
     with tab_check:
         st.markdown(result["review"] or "검토사항이 출력되지 않았습니다.")
 
     st.caption(
-        f"{result['model']} · {result['mode']} · 추가 치료 {result['weeks']}주 · 입력 {result['input_tokens']:,} 토큰 · 출력 {result['output_tokens']:,} 토큰 "
+        f"{result['model']} · {result['mode']} · 추가 치료 {weeks}주 · 입력 {result['input_tokens']:,} 토큰 · 출력 {result['output_tokens']:,} 토큰 "
         f"(AI 사고과정 포함) · 이번 비용 약 ${result['cost']:.4f} ≈ {result['cost'] * KRW_PER_USD:,.0f}원 "
         f"(환율 {KRW_PER_USD:,}원 가정)"
         + (" · Google 무료 키라면 실제 청구액은 0원" if result["provider"] == "google" else "")
