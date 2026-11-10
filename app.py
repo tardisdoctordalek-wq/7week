@@ -150,17 +150,30 @@ confirmed = st.checkbox("전송될 내용에 환자를 특정할 수 있는 정�
 
 # ---------- 3. 작성 ----------
 st.subheader("3. 소견서 초안 작성")
-mode_col, weeks_col = st.columns([2, 1])
-mode = mode_col.radio(
+mode = st.radio(
     "작성 방식",
     prompts.MODES,
     horizontal=True,
     disabled=busy,
     help="'기록 추세 기반 예후 포함'은 기록된 수치 변화(예: VAS 8→5)에서 나오는 예후 문장까지 씁니다.",
 )
+
+st.markdown("**7번 치료 계획** (날짜는 앱이 계산합니다)")
+date_col, weeks_col = st.columns([1, 2])
+accident = date_col.date_input("사고일", value=None, format="YYYY.MM.DD", disabled=busy)
 weeks = weeks_col.radio(
-    "추가 치료 기간 (7번)", prompts.WEEK_OPTIONS, format_func=lambda w: f"{w}주", horizontal=True, disabled=busy
+    "추가 치료 기간", prompts.WEEK_OPTIONS, format_func=lambda w: f"{w}주", horizontal=True, disabled=busy
 )
+
+plan = None
+if accident:
+    plan = prompts.TreatmentPlan(accident, weeks)
+    week8, end = plan.dates()
+    st.caption(f"8주 경과일 {week8:%Y.%m.%d} · 종료일 {end:%Y.%m.%d}")
+    st.caption(f"7번 문구: {plan.sentence()}")
+else:
+    st.caption("사고일을 입력해야 초안을 작성할 수 있습니다.")
+
 memo = st.text_area(
     "원장님 메모 (선택)",
     placeholder="기록에 없지만 반영할 내용. 예) 3주차 이후 야간통 호소 증가",
@@ -168,7 +181,8 @@ memo = st.text_area(
     disabled=busy,
 )
 
-request_id = hashlib.sha256("\x00".join([model["id"], mode, str(weeks), records, memo]).encode()).hexdigest()
+plan_text = plan.sentence() if plan else ""
+request_id = hashlib.sha256("\x00".join([model["id"], mode, plan_text, records, memo]).encode()).hexdigest()
 already_done = request_id in st.session_state["cache"]
 
 
@@ -178,7 +192,7 @@ def start(force: bool = False) -> None:
     st.session_state["force"] = force
 
 
-ready = confirmed and bool(api_key)
+ready = confirmed and bool(api_key) and plan is not None
 col_a, col_b = st.columns([1, 4])
 col_a.button("초안 작성", type="primary", disabled=busy or not ready, on_click=start)
 if already_done:
@@ -207,12 +221,12 @@ if busy:
                 res = llm.generate(
                     model,
                     api_key,
-                    prompts.build_system_prompt(mode, weeks),
+                    prompts.build_system_prompt(mode, plan),
                     prompts.build_user_message(records, memo),
                     show,
                 )
             draft, review = prompts.split_output(res.text)
-            draft = prompts.apply_fixed_answers(draft, weeks)
+            draft = prompts.apply_fixed_answers(draft, plan)
             result = {
                 "draft": draft,
                 "review": review,
